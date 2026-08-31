@@ -93,6 +93,7 @@
   td input { width: 100%; border: none; background: transparent; padding: 4px; font-size: 13px; }
   td input:focus { outline: 1px solid var(--accent); background: #fff; }
   .col-del { width: 68px; text-align: center; }
+  .th-note { font-weight: normal; font-size: 11px; color: #888; }
   .row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
   .row-actions button { padding: 3px 0; font-size: 12px; line-height: 1; }
   .btn-dup, .btn-up, .btn-down { border-color: #888; color: #555; }
@@ -180,15 +181,21 @@
 <div class="section">
   <h2>單據資訊</h2>
   <div class="grid">
-    <label>買方（公司中文名稱）
+    <label>文件類型
+      <select id="docType">
+        <option value="debit">DEBIT NOTE</option>
+        <option value="delivery">送貨單</option>
+      </select>
+    </label>
+    <label>買方／客戶（公司中文名稱）
       <input type="text" id="buyerName" list="buyerHistory" placeholder="例：南緯實業股份有限公司">
       <datalist id="buyerHistory"></datalist>
     </label>
+  </div>
+  <div class="grid" id="debitOnlyFields" style="margin-top:10px;">
     <label>NO.（單號）
       <input type="text" id="noValue" placeholder="例：08072026">
     </label>
-  </div>
-  <div class="grid wide" style="margin-top:10px;">
     <label>內容（摘要）
       <input type="text" id="content" placeholder="例：產前樣+測試樣">
     </label>
@@ -269,7 +276,7 @@
   <table>
     <thead>
       <tr>
-        <th>日期</th><th>貨號</th><th>款式</th><th>板式</th><th>數量</th><th>單價（元/件）</th><th>總計（元）</th><th class="col-del"></th>
+        <th>日期</th><th>貨號</th><th>款式</th><th>板式</th><th>數量</th><th>單價（元/件）</th><th>總計（元）</th><th>跟單<br><span class="th-note">（送貨單用）</span></th><th class="col-del"></th>
       </tr>
     </thead>
     <tbody id="itemsBody"></tbody>
@@ -353,8 +360,10 @@
     "bankAddrZh", "bankAddrEn", "sellerUnit"
   ];
 
-  const HEADERS = ["日期", "貨號", "款式", "板式", "數量", "單價（元/件）", "總計（元）"];
-  const COL_WIDTHS = [12, 12, 15, 15, 9, 15, 17]; // % 加總 100，模擬欄寬比例
+  const HEADERS_DEBIT = ["日期", "貨號", "款式", "板式", "數量", "單價（元/件）", "總計（元）"];
+  const HEADERS_DELIVERY = ["日期", "貨號", "款式", "板式", "數量", "單價（元/件）", "總計（元）", "跟單"];
+  const COL_WIDTHS_DEBIT = [12, 12, 15, 15, 9, 15, 17]; // % 模擬欄寬比例
+  const COL_WIDTHS_DELIVERY = [11, 11, 13, 13, 8, 13, 15, 16];
 
   // ---------- 預設今天日期（中文格式） ----------
   function todayZh() {
@@ -398,6 +407,7 @@
       <td><input type="number" class="c-qty" value="${data.qty ?? ""}" step="1"></td>
       <td><input type="number" class="c-price" value="${data.price ?? ""}" step="0.01"></td>
       <td><input type="text" class="c-total" value="0.00" readonly></td>
+      <td><input type="text" class="c-handler" value="${data.handler || ""}"></td>
       <td class="col-del">
         <div class="row-actions">
           <button type="button" class="btn-up" title="上移這一列">↑</button>
@@ -427,6 +437,7 @@
         pattern: tr.querySelector(".c-pattern").value,
         qty: tr.querySelector(".c-qty").value,
         price: tr.querySelector(".c-price").value,
+        handler: tr.querySelector(".c-handler").value,
       };
       addRow(copy, tr);
       schedulePreview();
@@ -456,8 +467,9 @@
     pattern: ["板式", "pattern"],
     qty: ["數量", "数量", "件數", "件数", "qty", "quantity"],
     price: ["單價", "单价", "price", "unit price"],
+    handler: ["跟單", "跟单", "merchandiser", "follow up"],
   };
-  const FIELD_LABELS = [["date", "日期"], ["code", "貨號"], ["style", "款式"], ["pattern", "板式"], ["qty", "數量"], ["price", "單價"]];
+  const FIELD_LABELS = [["date", "日期"], ["code", "貨號"], ["style", "款式"], ["pattern", "板式"], ["qty", "數量"], ["price", "單價"], ["handler", "跟單"]];
   let pendingImport = null;
 
   function toNum(v) {
@@ -553,8 +565,9 @@
       const get = (key) => (key in colMap ? cellText(r[colMap[key]]) : "");
       const date = toTrad(get("date")), code = toTrad(get("code")), style = toTrad(get("style")), pattern = toTrad(get("pattern"));
       const qty = toNum(get("qty")), price = toNum(get("price"));
-      if (!date && !code && !style && !pattern && qty === "" && price === "") continue;
-      parsed.push({ date, code, style, pattern, qty, price });
+      const handler = toTrad(get("handler"));
+      if (!date && !code && !style && !pattern && qty === "" && price === "" && !handler) continue;
+      parsed.push({ date, code, style, pattern, qty, price, handler });
     }
     return parsed;
   }
@@ -1032,15 +1045,36 @@
   }
 
   // ---------- 共用資料模型：Excel 匯出 與 畫面預覽 都吃同一份 ----------
+  // DEBIT NOTE 跟 送貨單 共用同一套廠商/銀行/品項/簽署資料，只有表頭、品項欄位數、
+  // 合計列、簽署欄位分欄比例不一樣，所以用 DOC_TYPES 集中設定這些差異。
+  const DOC_TYPES = {
+    debit: { title: "DEBIT NOTE", cols: 7, twocol: { left: 3, gap: 1, right: 3 }, filePrefix: "DebitNote" },
+    delivery: { title: "送貨單", cols: 8, twocol: { left: 4, gap: 0, right: 4 }, filePrefix: "DeliveryNote" },
+  };
+  function currentDocType() {
+    return $("docType").value === "delivery" ? "delivery" : "debit";
+  }
+  function updateDocTypeUI() {
+    const delivery = currentDocType() === "delivery";
+    $("debitOnlyFields").style.display = delivery ? "none" : "";
+    schedulePreview();
+  }
+
   function buildModel() {
+    const docType = currentDocType();
+    const cfg = DOC_TYPES[docType];
     const rows = [];
     const buyerName = $("buyerName").value || "";
-    rows.push({ kind: "title", text: "DEBIT NOTE" });
-    rows.push({ kind: "text", text: `買方：${buyerName}` });
-    rows.push({ kind: "text", text: `賣方：${$("sellerNameZh").value}` });
-    rows.push({ kind: "text", text: `NO：${$("noValue").value}` });
-    rows.push({ kind: "text", text: `內容：${$("content").value}` });
-    rows.push({ kind: "header", values: HEADERS });
+    rows.push({ kind: "title", text: cfg.title, cols: cfg.cols });
+    if (docType === "delivery") {
+      rows.push({ kind: "text", text: `客戶：${buyerName}`, cols: cfg.cols });
+    } else {
+      rows.push({ kind: "text", text: `買方：${buyerName}`, cols: cfg.cols });
+      rows.push({ kind: "text", text: `賣方：${$("sellerNameZh").value}`, cols: cfg.cols });
+      rows.push({ kind: "text", text: `NO：${$("noValue").value}`, cols: cfg.cols });
+      rows.push({ kind: "text", text: `內容：${$("content").value}`, cols: cfg.cols });
+    }
+    rows.push({ kind: "header", values: docType === "delivery" ? HEADERS_DELIVERY : HEADERS_DEBIT });
 
     const itemRows = Array.from(itemsBody.querySelectorAll("tr")).map((tr) => ({
       date: tr.querySelector(".c-date").value,
@@ -1049,17 +1083,24 @@
       pattern: tr.querySelector(".c-pattern").value,
       qty: parseFloat(tr.querySelector(".c-qty").value) || 0,
       price: parseFloat(tr.querySelector(".c-price").value) || 0,
-    })).filter((r) => r.date || r.code || r.style || r.pattern || r.qty || r.price);
+      handler: tr.querySelector(".c-handler").value,
+    })).filter((r) => r.date || r.code || r.style || r.pattern || r.qty || r.price || r.handler);
 
     let grandTotal = 0;
     itemRows.forEach((r) => {
       const total = r.qty * r.price;
       grandTotal += total;
-      rows.push({ kind: "item", values: [r.date, r.code, r.style, r.pattern, r.qty, r.price, total] });
+      const values = [r.date, r.code, r.style, r.pattern, r.qty, r.price, total];
+      if (docType === "delivery") values.push(r.handler);
+      rows.push({ kind: "item", values });
     });
 
-    rows.push({ kind: "total", label: "合計金額：", value: `¥${money(grandTotal)}` });
-    rows.push({ kind: "spacer" });
+    // 送貨單範本合計會先列一行「合計」，再列一行「合計金額：」，兩者數字相同，照樣重現。
+    if (docType === "delivery") {
+      rows.push({ kind: "total", label: "合計", value: `¥${money(grandTotal)}`, cols: cfg.cols });
+    }
+    rows.push({ kind: "total", label: "合計金額：", value: `¥${money(grandTotal)}`, cols: cfg.cols });
+    rows.push({ kind: "spacer", cols: cfg.cols });
     rows.push({ kind: "text", text: "收款銀行資料", bold: true });
     rows.push({ kind: "text", text: `公司英文名稱　${$("sellerNameEn").value}` });
     rows.push({ kind: "text", text: $("sellerAddrEn").value });
@@ -1078,11 +1119,11 @@
     rows.push({ kind: "spacer" });
     rows.push({ kind: "text", text: `銀行代碼SWIFT CODE：${$("swiftCode").value}` });
     rows.push({ kind: "spacer" });
-    rows.push({ kind: "twocol", left: `賣方單位：${$("sellerUnit").value}`, right: `買方單位：${$("buyerUnit").value}` });
-    rows.push({ kind: "twocol", left: `經手人：${$("sellerHandler").value}`, right: `經手人：${$("buyerHandler").value}` });
-    rows.push({ kind: "twocol", left: `日期：${$("sellerDate").value}`, right: `日期：${$("buyerDate").value}` });
+    rows.push({ kind: "twocol", left: `賣方單位：${$("sellerUnit").value}`, right: `買方單位：${$("buyerUnit").value}`, split: cfg.twocol });
+    rows.push({ kind: "twocol", left: `經手人：${$("sellerHandler").value}`, right: `經手人：${$("buyerHandler").value}`, split: cfg.twocol });
+    rows.push({ kind: "twocol", left: `日期：${$("sellerDate").value}`, right: `日期：${$("buyerDate").value}`, split: cfg.twocol });
 
-    return { rows, grandTotal, buyerName };
+    return { rows, grandTotal, buyerName, docType, cfg };
   }
 
   // ---------- 畫面預覽 ----------
@@ -1094,21 +1135,24 @@
 
   function renderPreview() {
     const model = buildModel();
-    const colgroup = "<colgroup>" + COL_WIDTHS.map((w) => `<col style="width:${w}%">`).join("") + "</colgroup>";
+    const cols = model.cfg.cols;
+    const widths = model.docType === "delivery" ? COL_WIDTHS_DELIVERY : COL_WIDTHS_DEBIT;
+    const colgroup = "<colgroup>" + widths.map((w) => `<col style="width:${w}%">`).join("") + "</colgroup>";
     let html = colgroup;
 
     model.rows.forEach((row) => {
+      const span = row.cols || cols;
       if (row.kind === "title") {
-        html += `<tr><td colspan="7" class="xl-title plain">${esc(row.text)}</td></tr>`;
+        html += `<tr><td colspan="${span}" class="xl-title plain">${esc(row.text)}</td></tr>`;
       } else if (row.kind === "text") {
         const cls = ["plain", "wrap"];
         if (row.bold) cls.push("bold");
         if (row.color === "blue") cls.push("blue");
-        html += `<tr><td colspan="7" class="${cls.join(" ")}">${esc(row.text)}</td></tr>`;
+        html += `<tr><td colspan="${span}" class="${cls.join(" ")}">${esc(row.text)}</td></tr>`;
       } else if (row.kind === "header") {
         html += "<tr>" + row.values.map((v) => `<td class="xl-header boxed">${esc(v)}</td>`).join("") + "</tr>";
       } else if (row.kind === "item") {
-        const [date, code, style, pattern, qty, price, total] = row.values;
+        const [date, code, style, pattern, qty, price, total, handler] = row.values;
         html += "<tr>"
           + `<td class="boxed">${esc(date)}</td>`
           + `<td class="boxed">${esc(code)}</td>`
@@ -1117,13 +1161,19 @@
           + `<td class="boxed num">${qty ? esc(qty) : ""}</td>`
           + `<td class="boxed num">${price ? esc(money(price)) : ""}</td>`
           + `<td class="boxed num">${total ? esc(money(total)) : ""}</td>`
+          + (row.values.length > 7 ? `<td class="boxed">${esc(handler)}</td>` : "")
           + "</tr>";
       } else if (row.kind === "total") {
-        html += `<tr><td colspan="6" class="boxed bold num">${esc(row.label)}</td><td class="boxed bold num">${esc(row.value)}</td></tr>`;
+        // 金額固定對齊「總計（元）」欄（第 7 欄），不管總欄數是 7 還是 8（送貨單多的「跟單」欄留空）
+        const trailing = span > 7 ? `<td class="boxed" colspan="${span - 7}"></td>` : "";
+        html += `<tr><td colspan="6" class="boxed bold num">${esc(row.label)}</td><td class="boxed bold num">${esc(row.value)}</td>${trailing}</tr>`;
       } else if (row.kind === "spacer") {
-        html += `<tr class="spacer"><td colspan="7"></td></tr>`;
+        html += `<tr class="spacer"><td colspan="${span}"></td></tr>`;
       } else if (row.kind === "twocol") {
-        html += `<tr><td colspan="3" class="plain wrap">${esc(row.left)}</td><td colspan="1" class="plain"></td><td colspan="3" class="plain wrap">${esc(row.right)}</td></tr>`;
+        const sp = row.split || { left: 3, gap: 1, right: 3 };
+        html += `<tr><td colspan="${sp.left}" class="plain wrap">${esc(row.left)}</td>`
+          + (sp.gap ? `<td colspan="${sp.gap}" class="plain"></td>` : "")
+          + `<td colspan="${sp.right}" class="plain wrap">${esc(row.right)}</td></tr>`;
       }
     });
 
@@ -1142,12 +1192,11 @@
 
   // ---------- 產生 Excel（跟預覽吃同一份 model） ----------
   async function buildWorkbook(model) {
+    const cols = model.cfg.cols; // 7 (DEBIT NOTE) 或 8（送貨單，多一欄跟單）
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("DEBIT NOTE");
-    ws.columns = [
-      { width: 10 }, { width: 10 }, { width: 12 }, { width: 12 },
-      { width: 8 }, { width: 12 }, { width: 14 }
-    ];
+    const ws = wb.addWorksheet(model.cfg.title);
+    const baseWidths = [10, 10, 12, 12, 8, 12, 14, 10];
+    ws.columns = baseWidths.slice(0, cols).map((width) => ({ width }));
 
     const thinBorder = { style: "thin", color: { argb: "FF999999" } };
     const boxBorder = { top: thinBorder, left: thinBorder, bottom: thinBorder, right: thinBorder };
@@ -1155,8 +1204,9 @@
     function mergedTextRow(text, opts) {
       opts = opts || {};
       const rowIdx = ws.rowCount + 1;
-      ws.mergeCells(`A${rowIdx}:G${rowIdx}`);
-      const cell = ws.getCell(`A${rowIdx}`);
+      const span = opts.cols || cols;
+      ws.mergeCells(rowIdx, 1, rowIdx, span);
+      const cell = ws.getCell(rowIdx, 1);
       cell.value = text;
       cell.font = { bold: !!opts.bold, size: opts.size || 11, color: opts.color ? { argb: opts.color } : undefined };
       cell.alignment = { vertical: "middle", horizontal: opts.center ? "center" : "left", wrapText: true };
@@ -1165,10 +1215,11 @@
     }
 
     model.rows.forEach((row) => {
+      const span = row.cols || cols;
       if (row.kind === "title") {
-        mergedTextRow(row.text, { bold: true, size: 16, center: true, height: 24 });
+        mergedTextRow(row.text, { bold: true, size: 16, center: true, height: 24, cols: span });
       } else if (row.kind === "text") {
-        mergedTextRow(row.text, { bold: row.bold, color: row.color === "blue" ? "FF2F5FA8" : undefined });
+        mergedTextRow(row.text, { bold: row.bold, color: row.color === "blue" ? "FF2F5FA8" : undefined, cols: span });
       } else if (row.kind === "header") {
         const rowIdx = ws.rowCount + 1;
         ws.getRow(rowIdx).values = row.values;
@@ -1179,25 +1230,28 @@
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF1F5" } };
         });
       } else if (row.kind === "item") {
-        const [date, code, style, pattern, qty, price, total] = row.values;
+        const [date, code, style, pattern, qty, price, total, handler] = row.values;
         const rowIdx = ws.rowCount + 1;
         const r = ws.getRow(rowIdx);
-        r.values = [date, code, style, pattern, qty || null, price || null, total || null];
+        const values = [date, code, style, pattern, qty || null, price || null, total || null];
+        if (row.values.length > 7) values.push(handler || null);
+        r.values = values;
         r.getCell(5).numFmt = "0";
         r.getCell(6).numFmt = "0.00";
         r.getCell(7).numFmt = "0.00";
         r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
           cell.border = boxBorder;
-          if (colNumber >= 5) cell.alignment = { horizontal: "right" };
+          if (colNumber >= 5 && colNumber <= 7) cell.alignment = { horizontal: "right" };
         });
       } else if (row.kind === "total") {
+        // 金額固定對齊「總計（元）」欄（第 7 欄），跟畫面預覽的邏輯一致
         const rowIdx = ws.rowCount + 1;
-        ws.mergeCells(`A${rowIdx}:F${rowIdx}`);
-        const labelCell = ws.getCell(`A${rowIdx}`);
+        ws.mergeCells(rowIdx, 1, rowIdx, 6);
+        const labelCell = ws.getCell(rowIdx, 1);
         labelCell.value = row.label;
         labelCell.font = { bold: true };
         labelCell.alignment = { horizontal: "right" };
-        const valueCell = ws.getCell(`G${rowIdx}`);
+        const valueCell = ws.getCell(rowIdx, 7);
         valueCell.value = row.value;
         valueCell.font = { bold: true };
         valueCell.alignment = { horizontal: "right" };
@@ -1205,12 +1259,14 @@
       } else if (row.kind === "spacer") {
         ws.addRow([]);
       } else if (row.kind === "twocol") {
+        const sp = row.split || { left: 3, gap: 1, right: 3 };
         const rowIdx = ws.rowCount + 1;
-        ws.mergeCells(`A${rowIdx}:C${rowIdx}`);
-        ws.mergeCells(`E${rowIdx}:G${rowIdx}`);
-        const leftCell = ws.getCell(`A${rowIdx}`);
+        ws.mergeCells(rowIdx, 1, rowIdx, sp.left);
+        const rightStart = sp.left + sp.gap + 1;
+        ws.mergeCells(rowIdx, rightStart, rowIdx, rightStart + sp.right - 1);
+        const leftCell = ws.getCell(rowIdx, 1);
         leftCell.value = row.left;
-        const rightCell = ws.getCell(`E${rowIdx}`);
+        const rightCell = ws.getCell(rowIdx, rightStart);
         rightCell.value = row.right;
         [leftCell, rightCell].forEach((c) => { c.alignment = { wrapText: true }; });
       }
@@ -1236,18 +1292,21 @@
     const wb = await buildWorkbook(model);
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const seller = $("sellerNameZh").value || "DebitNote";
-    const no = $("noValue").value || "";
+    const seller = $("sellerNameZh").value || model.cfg.filePrefix;
+    const no = model.docType === "delivery" ? "" : $("noValue").value || "";
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `DebitNote_${seller}_${no}.xlsx`.replace(/[\\/:*?"<>|]/g, "");
+    a.download = `${model.cfg.filePrefix}_${seller}_${no}.xlsx`.replace(/_+\.xlsx$/, ".xlsx").replace(/[\\/:*?"<>|]/g, "");
     a.click();
     URL.revokeObjectURL(a.href);
-    setStatus("Excel 已下載完成 ✅");
+    setStatus(`${model.cfg.title} Excel 已下載完成 ✅`);
   });
+
+  $("docType").addEventListener("change", updateDocTypeUI);
 
   // 預設先給 3 列可填，並渲染一次初始預覽
   addRow(); addRow(); addRow();
+  updateDocTypeUI();
   renderPreview();
 
 })();
