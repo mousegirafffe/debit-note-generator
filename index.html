@@ -1,0 +1,1256 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Debit Note 產生器</title>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/full.js"></script>
+<style>
+  :root {
+    --border: #d8d8d8;
+    --accent: #2f5fa8;
+    --bg-section: #fafafa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft JhengHei", "PingFang TC", -apple-system, sans-serif;
+    max-width: 1440px;
+    margin: 24px auto;
+    padding: 0 16px 80px;
+    color: #222;
+    line-height: 1.5;
+  }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.15fr);
+    gap: 20px;
+    align-items: start;
+  }
+  .preview-col {
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+  }
+  @media (max-width: 1000px) {
+    .layout { grid-template-columns: 1fr; }
+    .preview-col { position: static; max-height: none; }
+  }
+  .section {
+    background: var(--bg-section);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 18px;
+  }
+  .section h2 {
+    font-size: 15px;
+    margin: 0 0 12px;
+    border-left: 4px solid var(--accent);
+    padding-left: 8px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 20px;
+  }
+  .grid.wide { grid-template-columns: 1fr; }
+  label { display: flex; flex-direction: column; font-size: 13px; color: #444; gap: 4px; }
+  input[type=text], input[type=date], input[type=number], textarea, select {
+    font-family: inherit;
+    font-size: 14px;
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  textarea { resize: vertical; min-height: 42px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; align-items: center; }
+  .toolbar select { flex: 1; min-width: 160px; }
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 7px 14px;
+    border-radius: 5px;
+    border: 1px solid var(--accent);
+    background: #fff;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  button:hover { background: #eef3fb; }
+  button.primary { background: var(--accent); color: #fff; }
+  button.primary:hover { background: #244c8a; }
+  button.danger { border-color: #c0392b; color: #c0392b; }
+  button.danger:hover { background: #fdecea; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  th, td { border: 1px solid var(--border); padding: 6px; font-size: 13px; }
+  th { background: #eef1f5; }
+  td input { width: 100%; border: none; background: transparent; padding: 4px; font-size: 13px; }
+  td input:focus { outline: 1px solid var(--accent); background: #fff; }
+  .col-del { width: 68px; text-align: center; }
+  .row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+  .row-actions button { padding: 3px 0; font-size: 12px; line-height: 1; }
+  .btn-dup, .btn-up, .btn-down { border-color: #888; color: #555; }
+  .btn-dup:hover, .btn-up:hover, .btn-down:hover { background: #eee; }
+  .btn-up:disabled, .btn-down:disabled { opacity: 0.3; cursor: default; }
+  .total-row { display: flex; justify-content: flex-end; gap: 10px; align-items: baseline; font-size: 15px; margin-top: 6px; }
+  .total-row .amount { font-weight: bold; font-size: 18px; color: var(--accent); }
+  .actions-bottom { position: sticky; bottom: 0; background: #fff; padding: 14px 0; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
+  #status { font-size: 13px; color: #666; margin-right: auto; align-self: center; }
+  #status.error { color: #c0392b; }
+  #status.ok { color: #2e7d32; }
+  .hint { font-size: 12px; color: #888; margin-top: -6px; margin-bottom: 10px; }
+
+  .ocr-box {
+    border: 1.5px dashed var(--accent);
+    background: #f2f6fc;
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+  }
+  .ocr-box .ocr-title { font-size: 13px; font-weight: bold; margin-bottom: 6px; }
+  .ocr-box input[type=file] { font-size: 13px; }
+  .ocr-warning { font-size: 12px; color: #a15c00; margin-top: 6px; }
+  #ocrStatus, #itemsImportStatus { font-size: 12px; color: var(--accent); margin-top: 6px; min-height: 16px; }
+  #ocrStatus.error, #itemsImportStatus.error { color: #c0392b; }
+  #ocrDetails { margin-top: 8px; font-size: 12px; }
+  #ocrDetails summary { cursor: pointer; color: var(--accent); }
+  #ocrRawText { width: 100%; margin-top: 6px; font-size: 12px; min-height: 100px; }
+  #ocrDetails button { margin-top: 6px; }
+
+  #itemsImportPreview {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed #b8cbe6;
+  }
+  .import-map-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px 12px;
+  }
+  .import-map-grid label { font-size: 12px; color: #444; display: flex; flex-direction: column; gap: 3px; }
+  .import-map-grid select { font-size: 12px; padding: 4px; }
+  #importPreviewRows { font-size: 12px; line-height: 1.7; }
+
+  /* ---- Excel 預覽 ---- */
+  #previewWrap {
+    overflow-x: auto;
+    background: #fff;
+    border: 1px solid #ccc;
+  }
+  table.xl-preview {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-family: Calibri, "Microsoft JhengHei", Arial, sans-serif;
+    font-size: 12.5px;
+    color: #111;
+  }
+  table.xl-preview td {
+    padding: 3px 6px;
+    vertical-align: middle;
+    border: none;
+  }
+  table.xl-preview td.boxed { border: 1px solid #8c8c8c; }
+  table.xl-preview td.plain { border: none; }
+  table.xl-preview td.xl-title { font-size: 17px; font-weight: bold; text-align: center; padding: 10px 6px; }
+  table.xl-preview td.xl-header { background: #eef1f5; font-weight: bold; text-align: center; }
+  table.xl-preview td.num { text-align: right; }
+  table.xl-preview td.bold { font-weight: bold; }
+  table.xl-preview td.blue { color: #2f5fa8; }
+  table.xl-preview td.wrap { white-space: pre-wrap; }
+  table.xl-preview tr.spacer td { height: 8px; padding: 0; }
+  .preview-note { font-size: 12px; color: #888; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<h1>Debit Note 產生器</h1>
+<div class="subtitle">填好資料 → 下載成 Excel，格式比照原本的 DEBIT NOTE 單據。所有資料只存在你自己的瀏覽器裡，不會上傳到任何地方。</div>
+
+<div class="layout">
+<div class="form-col">
+
+<div class="section">
+  <h2>單據資訊</h2>
+  <div class="grid">
+    <label>買方（公司中文名稱）
+      <input type="text" id="buyerName" list="buyerHistory" placeholder="例：南緯實業股份有限公司">
+      <datalist id="buyerHistory"></datalist>
+    </label>
+    <label>NO.（單號）
+      <input type="text" id="noValue" placeholder="例：08072026">
+    </label>
+  </div>
+  <div class="grid wide" style="margin-top:10px;">
+    <label>內容（摘要）
+      <input type="text" id="content" placeholder="例：產前樣+測試樣">
+    </label>
+  </div>
+</div>
+
+<div class="section">
+  <h2>賣方 / 收款銀行資料</h2>
+
+  <div class="ocr-box">
+    <div class="ocr-title">📎 上傳廠商資訊自動帶入（例如供應商付款約定書 PDF 或照片，可一次選多個檔案，例如中文版＋英文版）</div>
+    <input type="file" id="vendorFileInput" accept="application/pdf,image/*" multiple>
+    <div id="ocrStatus"></div>
+    <div class="ocr-warning">⚠️ 辨識結果可能有誤，帳號、SWIFT Code 等關鍵資訊套用後請務必核對原始文件再使用。</div>
+    <details id="ocrDetails" style="display:none;">
+      <summary>辨識到的原始文字（可以手動修正後重新套用）</summary>
+      <textarea id="ocrRawText" rows="6"></textarea><br>
+      <button type="button" id="btnReapplyOcr">重新套用到下面欄位</button>
+    </details>
+  </div>
+
+  <div class="toolbar">
+    <select id="vendorSelect"></select>
+    <button id="btnLoadVendor" type="button">套用選取的廠商</button>
+    <button id="btnSaveVendor" type="button">儲存 / 更新此廠商</button>
+    <button id="btnDeleteVendor" type="button" class="danger">刪除此廠商</button>
+    <button id="btnExportVendors" type="button">匯出設定(JSON)</button>
+    <button id="btnImportVendors" type="button">匯入設定(JSON)</button>
+    <input type="file" id="importFile" accept="application/json" style="display:none">
+  </div>
+  <div class="hint">同一個廠商資料可以存起來下次直接套用；不同電腦之間可用「匯出/匯入設定」互相同步。</div>
+  <div class="grid">
+    <label>賣方公司中文名稱
+      <input type="text" id="sellerNameZh" placeholder="例：太倉樣品室">
+    </label>
+    <label>賣方公司英文名稱
+      <input type="text" id="sellerNameEn" placeholder="例：Taicang Shaxi Fuzhi Garment Factory">
+    </label>
+    <label>賣方地址（中文）
+      <textarea id="sellerAddrZh" placeholder="例：太倉市沙溪鎮復志服裝廠"></textarea>
+    </label>
+    <label>賣方地址（英文）
+      <textarea id="sellerAddrEn" placeholder="例：江苏省太仓市沙溪镇沙东路795号 (NO.795 SHADONGROAD, TAICANG CITY, JIANGSU, P.R. CHINA)"></textarea>
+    </label>
+    <label>電話
+      <input type="text" id="sellerPhone" placeholder="例：13862289887">
+    </label>
+    <label>開戶行
+      <input type="text" id="bankNameZh" placeholder="例：中國銀行 太倉沙溪支行">
+    </label>
+    <label>帳戶號碼
+      <input type="text" id="bankAccount" placeholder="例：548264581684">
+    </label>
+    <label>SWIFT CODE
+      <input type="text" id="swiftCode" placeholder="例：BKCHCNBJ95B">
+    </label>
+    <label>銀行中文名稱和地址
+      <textarea id="bankAddrZh" placeholder="例：中國銀行 太倉沙溪支行 中國江蘇省蘇州市太倉市沙溪鎮新北街44號"></textarea>
+    </label>
+    <label>銀行英文名稱和地址
+      <textarea id="bankAddrEn" placeholder="例：BANK OF CHINA, SUZHOU BRANCH TAICANG&#10;NO. 44, XINBEI EAST ROAD, SHAXI TOWN, TAICANG CITY, SUZHOU, JIANGSU PROVINCE, CHINA"></textarea>
+    </label>
+  </div>
+</div>
+
+<div class="section">
+  <h2>品項明細</h2>
+
+  <div class="ocr-box">
+    <div class="ocr-title">📎 上傳品項明細（.xlsx / .csv）自動帶入下表</div>
+    <input type="file" id="itemsFileInput" accept=".xlsx,.xls,.csv">
+    <div id="itemsImportStatus"></div>
+    <div class="hint" style="margin-top:6px; margin-bottom:0;">上傳後會先讓你確認每一欄對應到哪個欄位（辨識錯了可以手動改選），確認後才會蓋掉下面目前的明細列。支援 .xlsx / .csv，舊版 .xls 請先在 Excel 另存成 .xlsx。</div>
+    <div id="itemsImportPreview" style="display:none;"></div>
+  </div>
+
+  <div class="hint">「日期」欄可以直接打「6月」這種簡寫，不用一定是完整日期。要列快遞費，就新增一列，只填款式（例：快遞費）、數量、單價即可。</div>
+  <table>
+    <thead>
+      <tr>
+        <th>日期</th><th>貨號</th><th>款式</th><th>板式</th><th>數量</th><th>單價（元/件）</th><th>總計（元）</th><th class="col-del"></th>
+      </tr>
+    </thead>
+    <tbody id="itemsBody"></tbody>
+  </table>
+  <button id="btnAddRow" type="button">+ 新增一列</button>
+  <div class="total-row">
+    合計金額： <span class="amount" id="grandTotal">¥0.00</span>
+  </div>
+</div>
+
+<div class="section">
+  <h2>簽署資訊</h2>
+  <div class="grid">
+    <label>賣方單位
+      <input type="text" id="sellerUnit" placeholder="例：太倉市沙溪鎮復志服裝廠">
+    </label>
+    <label>買方單位
+      <input type="text" id="buyerUnit" placeholder="例：南緯實業股份有限公司">
+    </label>
+    <label>賣方經手人
+      <input type="text" id="sellerHandler" placeholder="例：Li HaiYing">
+    </label>
+    <label>買方經手人
+      <input type="text" id="buyerHandler" placeholder="例：Rayne">
+    </label>
+    <label>賣方日期
+      <input type="text" id="sellerDate">
+    </label>
+    <label>買方日期
+      <input type="text" id="buyerDate">
+    </label>
+  </div>
+</div>
+
+</div><!-- /.form-col -->
+
+<div class="preview-col">
+<div class="section">
+  <h2>預覽（Excel 匯出後大致的樣子）</h2>
+  <div class="preview-note">左邊填的內容會即時同步過來，模擬下載後的 Excel 版面；實際字型、欄寬以 Excel 開啟後為準。</div>
+  <div id="previewWrap">
+    <table class="xl-preview" id="previewTable"></table>
+  </div>
+</div>
+</div><!-- /.preview-col -->
+
+</div><!-- /.layout -->
+
+<div class="actions-bottom">
+  <span id="status"></span>
+  <button id="btnGenerate" type="button" class="primary">下載 Excel</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const LS_VENDORS = "dn_vendors_v1";
+  const LS_BUYERS = "dn_buyer_history_v1";
+
+  const $ = (id) => document.getElementById(id);
+  const itemsBody = $("itemsBody");
+  const grandTotalEl = $("grandTotal");
+  const statusEl = $("status");
+  const previewTable = $("previewTable");
+
+  // 簡體轉繁體（給「上傳品項明細」「上傳廠商資訊 OCR」這兩個匯入功能用，
+  // 廠商給的資料常常是簡體，但單子上要用繁體）
+  let s2tConverter = null;
+  try {
+    if (typeof OpenCC !== "undefined") s2tConverter = OpenCC.Converter({ from: "cn", to: "tw" });
+  } catch (e) { s2tConverter = null; }
+  function toTrad(s) {
+    if (!s || !s2tConverter) return s;
+    try { return s2tConverter(s); } catch (e) { return s; }
+  }
+
+  const fieldIds = [
+    "sellerNameZh", "sellerNameEn", "sellerAddrZh", "sellerAddrEn",
+    "sellerPhone", "bankNameZh", "bankAccount", "swiftCode",
+    "bankAddrZh", "bankAddrEn", "sellerUnit"
+  ];
+
+  const HEADERS = ["日期", "貨號", "款式", "板式", "數量", "單價（元/件）", "總計（元）"];
+  const COL_WIDTHS = [12, 12, 15, 15, 9, 15, 17]; // % 加總 100，模擬欄寬比例
+
+  // ---------- 預設今天日期（中文格式） ----------
+  function todayZh() {
+    const d = new Date();
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+  $("sellerDate").value = todayZh();
+  $("buyerDate").value = todayZh();
+
+  // ---------- 品項列 ----------
+  function money(n) {
+    return (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function recalcRow(tr) {
+    const qty = parseFloat(tr.querySelector(".c-qty").value) || 0;
+    const price = parseFloat(tr.querySelector(".c-price").value) || 0;
+    tr.querySelector(".c-total").value = money(qty * price);
+    recalcGrandTotal();
+  }
+
+  function recalcGrandTotal() {
+    let sum = 0;
+    itemsBody.querySelectorAll("tr").forEach((tr) => {
+      const qty = parseFloat(tr.querySelector(".c-qty").value) || 0;
+      const price = parseFloat(tr.querySelector(".c-price").value) || 0;
+      sum += qty * price;
+    });
+    grandTotalEl.textContent = "¥" + money(sum);
+    schedulePreview();
+  }
+
+  function addRow(data, insertAfterEl) {
+    data = data || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="text" class="c-date" value="${data.date || ""}"></td>
+      <td><input type="text" class="c-code" value="${data.code || ""}"></td>
+      <td><input type="text" class="c-style" value="${data.style || ""}"></td>
+      <td><input type="text" class="c-pattern" value="${data.pattern || ""}"></td>
+      <td><input type="number" class="c-qty" value="${data.qty ?? ""}" step="1"></td>
+      <td><input type="number" class="c-price" value="${data.price ?? ""}" step="0.01"></td>
+      <td><input type="text" class="c-total" value="0.00" readonly></td>
+      <td class="col-del">
+        <div class="row-actions">
+          <button type="button" class="btn-up" title="上移這一列">↑</button>
+          <button type="button" class="btn-down" title="下移這一列">↓</button>
+          <button type="button" class="btn-dup" title="複製這一列">⧉</button>
+          <button type="button" class="danger btn-del" title="刪除這一列">✕</button>
+        </div>
+      </td>
+    `;
+    if (insertAfterEl && insertAfterEl.parentNode === itemsBody) {
+      insertAfterEl.insertAdjacentElement("afterend", tr);
+    } else {
+      itemsBody.appendChild(tr);
+    }
+    tr.querySelector(".c-qty").addEventListener("input", () => recalcRow(tr));
+    tr.querySelector(".c-price").addEventListener("input", () => recalcRow(tr));
+    tr.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", schedulePreview));
+    tr.querySelector(".btn-del").addEventListener("click", () => {
+      tr.remove();
+      recalcGrandTotal();
+    });
+    tr.querySelector(".btn-dup").addEventListener("click", () => {
+      const copy = {
+        date: tr.querySelector(".c-date").value,
+        code: tr.querySelector(".c-code").value,
+        style: tr.querySelector(".c-style").value,
+        pattern: tr.querySelector(".c-pattern").value,
+        qty: tr.querySelector(".c-qty").value,
+        price: tr.querySelector(".c-price").value,
+      };
+      addRow(copy, tr);
+      schedulePreview();
+    });
+    tr.querySelector(".btn-up").addEventListener("click", () => {
+      const prev = tr.previousElementSibling;
+      if (prev) itemsBody.insertBefore(tr, prev);
+      schedulePreview();
+    });
+    tr.querySelector(".btn-down").addEventListener("click", () => {
+      const next = tr.nextElementSibling;
+      if (next) itemsBody.insertBefore(next, tr);
+      schedulePreview();
+    });
+    recalcRow(tr);
+    return tr;
+  }
+
+  $("btnAddRow").addEventListener("click", () => { addRow(); schedulePreview(); });
+
+  // ---------- 上傳品項明細（.xlsx / .csv）自動帶入 ----------
+  // labels 同時收繁體、簡體常見寫法，因為廠商給的表很多是簡體（货号/数量/单价/类别...）
+  const ITEM_HEADER_ALIASES = {
+    date: ["日期", "date"],
+    code: ["貨號", "货号", "品號", "款号", "款號", "貨品編號", "style no", "item no"],
+    style: ["款式", "类别", "類別", "style"],
+    pattern: ["板式", "pattern"],
+    qty: ["數量", "数量", "件數", "件数", "qty", "quantity"],
+    price: ["單價", "单价", "price", "unit price"],
+  };
+  const FIELD_LABELS = [["date", "日期"], ["code", "貨號"], ["style", "款式"], ["pattern", "板式"], ["qty", "數量"], ["price", "單價"]];
+  let pendingImport = null;
+
+  function toNum(v) {
+    if (v === null || v === undefined || v === "") return "";
+    const s = String(v).replace(/[^\d.\-]/g, "");
+    if (s === "" || s === "-") return "";
+    const n = parseFloat(s);
+    return isNaN(n) ? "" : n;
+  }
+
+  function cellText(v) {
+    if (v === null || v === undefined) return "";
+    if (v instanceof Date) return `${v.getMonth() + 1}/${v.getDate()}`;
+    if (typeof v === "object") {
+      if (Array.isArray(v.richText)) return v.richText.map((r) => r.text).join("");
+      if (v.text !== undefined) return String(v.text);
+      if (v.result !== undefined && typeof v.result !== "object") return String(v.result);
+      return ""; // 未知的物件格式，寧可留空也不要顯示 [object Object]
+    }
+    return String(v).trim();
+  }
+
+  function countHeaderHits(cells) {
+    let hits = 0;
+    Object.values(ITEM_HEADER_ALIASES).forEach((aliases) => {
+      if (cells.some((c) => aliases.some((a) => c.toLowerCase().includes(a.toLowerCase())))) hits++;
+    });
+    return hits;
+  }
+
+  function findItemHeaderRow(rows) {
+    for (let i = 0; i < Math.min(rows.length, 25); i++) {
+      if (countHeaderHits((rows[i] || []).map(cellText)) >= 3) return i;
+    }
+    return -1;
+  }
+
+  function buildItemColumnMap(headerCells) {
+    const map = {};
+    headerCells.forEach((raw, idx) => {
+      const text = cellText(raw).toLowerCase();
+      if (!text) return;
+      Object.keys(ITEM_HEADER_ALIASES).forEach((key) => {
+        if (!(key in map) && ITEM_HEADER_ALIASES[key].some((a) => text.includes(a.toLowerCase()))) {
+          map[key] = idx;
+        }
+      });
+    });
+    return map;
+  }
+
+  // 找出資料的起訖範圍：從標題列之後開始，遇到「合計/總計」列、連續兩列全空、
+  // 或又出現一列很像新表格標題（代表接了另一張不相干的表）就停止，避免把後面不相干的表也吃進來。
+  function detectDataRange(rows) {
+    const headerIdx = findItemHeaderRow(rows);
+    const start = headerIdx >= 0 ? headerIdx + 1 : 0;
+    let end = rows.length;
+    let sawData = false;
+    let blankStreak = 0;
+    for (let i = start; i < rows.length; i++) {
+      const cells = (rows[i] || []).map(cellText);
+      const joined = cells.join("").trim();
+      if (!joined) {
+        blankStreak++;
+        if (blankStreak >= 2) { end = i - blankStreak + 1; break; }
+        continue;
+      }
+      const firstCell = cells.find((c) => c.trim()) || "";
+      if (/^(合計|小計|總計|总计|total)/i.test(firstCell)) { end = i; break; }
+      if (sawData && countHeaderHits(cells) >= 3) { end = i; break; } // 接了另一張表的標題列
+      blankStreak = 0;
+      sawData = true;
+    }
+    return { headerIdx, start, end };
+  }
+
+  function buildColumnList(rows, headerIdx, start, end) {
+    let width = 0;
+    for (let i = Math.max(headerIdx, 0); i < end; i++) width = Math.max(width, (rows[i] || []).length);
+    const cols = [];
+    for (let i = 0; i < width; i++) {
+      const label = toTrad(headerIdx >= 0 ? cellText(rows[headerIdx][i]) : "") || `第 ${i + 1} 欄`;
+      cols.push({ index: i, label });
+    }
+    return cols;
+  }
+
+  function extractRows(rows, start, end, colMap) {
+    const parsed = [];
+    for (let i = start; i < end; i++) {
+      const r = rows[i];
+      if (!r) continue;
+      const get = (key) => (key in colMap ? cellText(r[colMap[key]]) : "");
+      const date = toTrad(get("date")), code = toTrad(get("code")), style = toTrad(get("style")), pattern = toTrad(get("pattern"));
+      const qty = toNum(get("qty")), price = toNum(get("price"));
+      if (!date && !code && !style && !pattern && qty === "" && price === "") continue;
+      parsed.push({ date, code, style, pattern, qty, price });
+    }
+    return parsed;
+  }
+
+  function parseCsvText(text) {
+    const rows = [];
+    text.split(/\r\n|\n|\r/).forEach((line) => {
+      if (line === "") { rows.push([]); return; }
+      const cells = [];
+      let cur = "", inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+          if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+          else if (ch === '"') { inQuotes = false; }
+          else { cur += ch; }
+        } else {
+          if (ch === '"') inQuotes = true;
+          else if (ch === ",") { cells.push(cur); cur = ""; }
+          else cur += ch;
+        }
+      }
+      cells.push(cur);
+      rows.push(cells);
+    });
+    return rows;
+  }
+
+  async function readItemsFile(file) {
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (ext === "csv") {
+      const text = await file.text();
+      return parseCsvText(text);
+    }
+    if (ext === "xlsx") {
+      const buf = await file.arrayBuffer();
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buf);
+      const ws = wb.worksheets[0];
+      const rows = [];
+      ws.eachRow({ includeEmpty: true }, (row) => {
+        rows.push(row.values.slice(1)); // row.values[0] 是 undefined
+      });
+      return rows;
+    }
+    throw new Error("不支援這種檔案格式，請用 .xlsx 或 .csv（舊版 .xls 請先另存成 .xlsx）");
+  }
+
+  function currentImportMap(box) {
+    const m = {};
+    box.querySelectorAll("select[data-field]").forEach((sel) => {
+      const v = parseInt(sel.value, 10);
+      if (v >= 0) m[sel.dataset.field] = v;
+    });
+    return m;
+  }
+
+  function renderImportPreview(guessMap) {
+    const box = $("itemsImportPreview");
+    const rowCount = pendingImport.end - pendingImport.start;
+    let html = `<div class="hint" style="margin:0 0 8px;">偵測到約 ${rowCount} 列資料，請確認每欄對應（不對就手動改選），下面會即時顯示前幾筆預覽：</div>`;
+    html += '<div class="import-map-grid">';
+    FIELD_LABELS.forEach(([key, label]) => {
+      html += `<label>${label}<select data-field="${key}"><option value="-1">（不匯入）</option>`;
+      pendingImport.columns.forEach((c) => {
+        const sel = guessMap[key] === c.index ? "selected" : "";
+        html += `<option value="${c.index}" ${sel}>${esc(c.label)}</option>`;
+      });
+      html += `</select></label>`;
+    });
+    html += "</div>";
+    html += `<div id="importPreviewRows"></div>`;
+    html += `<button type="button" id="btnConfirmItemsImport" class="primary">確認匯入</button> `;
+    html += `<button type="button" id="btnCancelItemsImport">取消</button>`;
+    box.innerHTML = html;
+    box.style.display = "block";
+
+    function updatePreviewRows() {
+      const m = currentImportMap(box);
+      const sample = extractRows(pendingImport.rows, pendingImport.start, pendingImport.end, m).slice(0, 4);
+      const lines = sample.map((r) =>
+        `${r.date || "-"} ｜ ${r.code || "-"} ｜ ${r.style || "-"} ｜ ${r.pattern || "-"} ｜ 數量 ${r.qty === "" ? "-" : r.qty} ｜ 單價 ${r.price === "" ? "-" : r.price}`
+      );
+      $("importPreviewRows").innerHTML = "預覽前幾筆：<br>" + (lines.join("<br>") || "（目前對應找不到資料，請調整欄位）");
+    }
+    box.querySelectorAll("select[data-field]").forEach((sel) => sel.addEventListener("change", updatePreviewRows));
+    updatePreviewRows();
+
+    $("btnConfirmItemsImport").addEventListener("click", () => {
+      const m = currentImportMap(box);
+      const parsed = extractRows(pendingImport.rows, pendingImport.start, pendingImport.end, m);
+      if (!parsed.length) {
+        $("itemsImportStatus").textContent = "目前欄位對應沒有匯入到任何資料，請調整後再試一次";
+        $("itemsImportStatus").className = "error";
+        return;
+      }
+      itemsBody.innerHTML = "";
+      parsed.forEach((r) => addRow(r));
+      recalcGrandTotal();
+      schedulePreview();
+      $("itemsImportStatus").textContent = `已匯入 ${parsed.length} 列品項明細 ✅`;
+      $("itemsImportStatus").className = "";
+      box.style.display = "none";
+      box.innerHTML = "";
+      pendingImport = null;
+    });
+    $("btnCancelItemsImport").addEventListener("click", () => {
+      box.style.display = "none";
+      box.innerHTML = "";
+      pendingImport = null;
+      $("itemsImportStatus").textContent = "已取消匯入";
+      $("itemsImportStatus").className = "";
+    });
+  }
+
+  function prepareImportPreview(rows) {
+    const { headerIdx, start, end } = detectDataRange(rows);
+    const columns = buildColumnList(rows, headerIdx, start, end);
+    const guessMap = headerIdx >= 0 ? buildItemColumnMap(rows[headerIdx]) : { date: 0, code: 1, style: 2, pattern: 3, qty: 4, price: 5 };
+    pendingImport = { rows, start, end, columns, headerIdx };
+    renderImportPreview(guessMap);
+  }
+
+  $("itemsFileInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $("itemsImportStatus").textContent = "讀取中…";
+    $("itemsImportStatus").className = "";
+    $("itemsImportPreview").style.display = "none";
+    try {
+      const rows = await readItemsFile(file);
+      prepareImportPreview(rows);
+      $("itemsImportStatus").textContent = "";
+    } catch (err) {
+      console.error(err);
+      $("itemsImportStatus").textContent = "匯入失敗：" + (err && err.message ? err.message : "未知錯誤");
+      $("itemsImportStatus").className = "error";
+    }
+    e.target.value = "";
+  });
+
+  // ---------- 廠商 (賣方/銀行) 預設值管理 ----------
+  function loadVendors() {
+    try { return JSON.parse(localStorage.getItem(LS_VENDORS)) || []; }
+    catch (e) { return []; }
+  }
+  function saveVendors(list) {
+    localStorage.setItem(LS_VENDORS, JSON.stringify(list));
+  }
+  function refreshVendorSelect(selectName) {
+    const list = loadVendors();
+    const sel = $("vendorSelect");
+    sel.innerHTML = '<option value="">— 選擇已存廠商 —</option>';
+    list.forEach((v) => {
+      const opt = document.createElement("option");
+      opt.value = v.name;
+      opt.textContent = v.name;
+      sel.appendChild(opt);
+    });
+    if (selectName) sel.value = selectName;
+  }
+
+  function applyVendor(v) {
+    fieldIds.forEach((id) => { if (v[id] !== undefined) $(id).value = v[id]; });
+  }
+
+  function currentVendorData(name) {
+    const obj = { name: name };
+    fieldIds.forEach((id) => { obj[id] = $(id).value; });
+    return obj;
+  }
+
+  // seed 一筆範例廠商（第一次使用時）
+  (function seed() {
+    if (loadVendors().length === 0) {
+      saveVendors([{
+        name: "太倉樣品室",
+        sellerNameZh: "太倉樣品室",
+        sellerNameEn: "Taicang Shaxi Fuzhi Garment Factory",
+        sellerAddrZh: "太倉市沙溪鎮復志服裝廠",
+        sellerAddrEn: "江苏省太仓市沙溪镇沙东路795号 (NO.795 SHADONGROAD, TAICANG CITY, JIANGSU, P.R. CHINA)",
+        sellerPhone: "13862289887",
+        bankNameZh: "中國銀行 太倉沙溪支行",
+        bankAccount: "548264581684",
+        swiftCode: "BKCHCNBJ95B",
+        bankAddrZh: "中國銀行 太倉沙溪支行 中國江蘇省蘇州市太倉市沙溪鎮新北街44號",
+        bankAddrEn: "BANK OF CHINA, SUZHOU BRANCH TAICANG\nNO. 44, XINBEI EAST ROAD, SHAXI TOWN, TAICANG CITY, SUZHOU, JIANGSU PROVINCE, CHINA",
+        sellerUnit: "太倉市沙溪鎮復志服裝廠"
+      }]);
+    }
+  })();
+  refreshVendorSelect();
+
+  $("btnLoadVendor").addEventListener("click", () => {
+    const name = $("vendorSelect").value;
+    if (!name) { setStatus("請先選擇一個廠商", true); return; }
+    const v = loadVendors().find((x) => x.name === name);
+    if (v) { applyVendor(v); setStatus(`已套用「${name}」的資料`); schedulePreview(); }
+  });
+
+  $("btnSaveVendor").addEventListener("click", () => {
+    const defaultName = $("sellerNameZh").value || "未命名廠商";
+    const name = prompt("要用什麼名稱儲存這個廠商？", defaultName);
+    if (!name) return;
+    const list = loadVendors();
+    const data = currentVendorData(name);
+    const idx = list.findIndex((x) => x.name === name);
+    if (idx >= 0) list[idx] = data; else list.push(data);
+    saveVendors(list);
+    refreshVendorSelect(name);
+    setStatus(`已儲存廠商「${name}」`);
+  });
+
+  $("btnDeleteVendor").addEventListener("click", () => {
+    const name = $("vendorSelect").value;
+    if (!name) { setStatus("請先選擇要刪除的廠商", true); return; }
+    if (!confirm(`確定要刪除「${name}」嗎？`)) return;
+    saveVendors(loadVendors().filter((x) => x.name !== name));
+    refreshVendorSelect();
+    setStatus(`已刪除「${name}」`);
+  });
+
+  $("btnExportVendors").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(loadVendors(), null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "debit-note-vendors.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  $("btnImportVendors").addEventListener("click", () => $("importFile").click());
+  $("importFile").addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const imported = JSON.parse(reader.result);
+        if (!Array.isArray(imported)) throw new Error("格式錯誤");
+        const list = loadVendors();
+        imported.forEach((v) => {
+          const idx = list.findIndex((x) => x.name === v.name);
+          if (idx >= 0) list[idx] = v; else list.push(v);
+        });
+        saveVendors(list);
+        refreshVendorSelect();
+        setStatus(`已匯入 ${imported.length} 筆廠商資料`);
+      } catch (err) {
+        setStatus("匯入失敗，請確認是正確的 JSON 檔", true);
+      }
+      e.target.value = "";
+    };
+    reader.readAsText(file);
+  });
+
+  // ---------- 上傳廠商資訊自動辨識（PDF / 圖片 → OCR → 套用欄位） ----------
+  if (typeof pdfjsLib !== "undefined") {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  }
+
+  const ocrStatusEl = $("ocrStatus");
+  function setOcrStatus(msg, isError) {
+    ocrStatusEl.textContent = msg || "";
+    ocrStatusEl.className = isError ? "error" : "";
+  }
+
+  const OCR_STATUS_LABEL = {
+    "loading tesseract core": "載入引擎中",
+    "initializing tesseract": "初始化中",
+    "loading language traineddata": "下載語言包中（第一次使用比較久）",
+    "initializing api": "準備辨識",
+    "recognizing text": "辨識文字中",
+  };
+
+  async function fileToCanvas(file) {
+    if (file.type === "application/pdf") {
+      if (typeof pdfjsLib === "undefined") throw new Error("PDF 讀取元件尚未載入，請確認網路連線");
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 2.5 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+      return canvas;
+    }
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext("2d").drawImage(img, 0, 0);
+    return canvas;
+  }
+
+  async function runOcr(canvas, labelPrefix) {
+    if (typeof Tesseract === "undefined") throw new Error("OCR 元件尚未載入，請確認網路連線");
+    const prefix = labelPrefix ? labelPrefix + "　" : "";
+    const { data } = await Tesseract.recognize(canvas, "chi_tra+eng", {
+      logger: (m) => {
+        if (m.status && m.progress != null) {
+          const label = OCR_STATUS_LABEL[m.status] || m.status;
+          setOcrStatus(`${prefix}${label}… ${Math.round(m.progress * 100)}%`);
+        }
+      },
+    });
+    return data.text;
+  }
+
+  // 套用範圍：目前是比照公司「供應商付款約定書（TR3-FA03-A04）」的固定表格版型，
+  // 之後若表單版型改變，調整下面的 labels 清單跟 grab() 對應欄位即可。
+  const OCR_LABELS = [
+    "Supplier Name", "Person in charge", "Tax ID", "Tel", "Postal Code", "Fax",
+    "Address", "e-mail", "email", "Bank Name", "Branch", "Beneficiary",
+    "Account NO.", "Account NO", "Account No", "SWIFT Code", "IBAN NO.", "IBAN NO",
+  ];
+
+  // 上傳多份檔案時，每份分開辨識、分開解析，用「===== 檔案 N：檔名 =====」當分隔線
+  // 存進同一個文字框，方便你逐份核對；重新套用時也會照這個分隔線切開，分開解析再合併。
+  const FILE_SEP_RE = /={5,}\s*檔案\s*\d+[：:][^\n]*={5,}/g;
+  function splitRawTextByFile(text) {
+    const parts = text.split(FILE_SEP_RE).map((s) => s.trim()).filter(Boolean);
+    return parts.length ? parts : [text];
+  }
+
+  // 一份文件裡同一個標籤（例如 Supplier Name／Address）只會抓到一個值；
+  // 如果那個值是中文就填中文欄位，是英文就填對應的英文欄位——
+  // 所以上傳中文版 + 英文版兩份檔案時，會自動分別填到中/英文欄位，不會互蓋。
+  function mergeParsedList(list) {
+    const merged = {};
+    list.forEach((p) => {
+      Object.keys(p).forEach((k) => {
+        if (!merged[k] && p[k]) merged[k] = p[k];
+      });
+    });
+    return merged;
+  }
+
+  function parseVendorText(rawText) {
+    const norm = " " + rawText.replace(/\s+/g, " ").trim() + " ";
+    function grab(label) {
+      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const others = OCR_LABELS.filter((l) => l !== label).map(esc);
+      const re = new RegExp(esc(label) + "\\s*[:：.]*\\s*(.*?)\\s*(?=" + others.join("|") + "|$)", "i");
+      const m = norm.match(re);
+      if (!m) return "";
+      return m[1].trim().replace(/^[:：.\-]+/, "").trim();
+    }
+    const rawAccount = (grab("Account NO.") || grab("Account NO") || grab("Account No")).replace(/[^0-9A-Za-z]/g, "");
+    const rawSwift = grab("SWIFT Code").replace(/[^0-9A-Za-z]/g, "");
+    const rawPhone = grab("Tel").replace(/[^\d+\- ]/g, "").trim();
+    const rawAddr = grab("Address");
+    const rawName = grab("Supplier Name");
+
+    // 帳戶號碼、SWIFT 是金流關鍵資訊，辨識結果不像合理格式就寧可留空，
+    // 不要把明顯亂碼的字串塞進欄位（避免看起來「有填」但其實是錯的）。
+    const isPlausibleAccount = /^[0-9]{6,20}$/.test(rawAccount);
+    const isPlausibleSwift = /^[A-Z0-9]{8}([A-Z0-9]{3})?$/i.test(rawSwift);
+    const hasCjk = (s) => /[一-鿿]{2,}/.test(s);
+    const looksLatin = (s) => !!s && !hasCjk(s) && /[A-Za-z]{2,}/.test(s);
+
+    return {
+      sellerNameZh: toTrad(hasCjk(rawName) ? rawName : ""),
+      sellerNameEn: looksLatin(rawName) ? rawName : "",
+      sellerHandler: toTrad(grab("Person in charge")),
+      sellerPhone: /\d{6,}/.test(rawPhone) ? rawPhone : "",
+      sellerAddrZh: toTrad(hasCjk(rawAddr) ? rawAddr : ""),
+      sellerAddrEn: looksLatin(rawAddr) ? rawAddr : "",
+      bankName: toTrad(grab("Bank Name")),
+      branch: toTrad(grab("Branch")),
+      bankAccount: isPlausibleAccount ? rawAccount : "",
+      bankAccountRaw: rawAccount,
+      swiftCode: isPlausibleSwift ? rawSwift.toUpperCase() : "",
+    };
+  }
+
+  function applyOcrText(rawText) {
+    const segments = splitRawTextByFile(rawText);
+    const p = mergeParsedList(segments.map(parseVendorText));
+    let filled = [];
+    let skipped = [];
+    if (p.sellerNameZh) { $("sellerNameZh").value = p.sellerNameZh; $("sellerUnit").value = p.sellerNameZh; filled.push("賣方中文名稱"); }
+    if (p.sellerNameEn) { $("sellerNameEn").value = p.sellerNameEn; filled.push("賣方英文名稱"); }
+    if (p.sellerHandler) { $("sellerHandler").value = p.sellerHandler; filled.push("經手人"); }
+    if (p.sellerPhone) { $("sellerPhone").value = p.sellerPhone; filled.push("電話"); }
+    if (p.sellerAddrZh) { $("sellerAddrZh").value = p.sellerAddrZh; filled.push("中文地址"); }
+    if (p.sellerAddrEn) { $("sellerAddrEn").value = p.sellerAddrEn; filled.push("英文地址"); }
+    if (p.bankName || p.branch) { $("bankNameZh").value = [p.bankName, p.branch].filter(Boolean).join(" "); filled.push("開戶行"); }
+    if (p.bankAccount) { $("bankAccount").value = p.bankAccount; filled.push("帳戶號碼"); }
+    else if (p.bankAccountRaw) { skipped.push("帳戶號碼（辨識結果不像帳號，故意留空，請手動對照原文件填）"); }
+    if (p.swiftCode) { $("swiftCode").value = p.swiftCode; filled.push("SWIFT"); }
+    schedulePreview();
+    const parts = [];
+    if (filled.length) parts.push(`已帶入：${filled.join("、")}`);
+    if (skipped.length) parts.push(`⚠️ 略過：${skipped.join("；")}`);
+    if (!filled.length && !skipped.length) parts.push("辨識文字裡沒找到能對應的欄位，請手動修改上面的辨識文字後再按一次「重新套用」");
+    setStatus(parts.join("　"), skipped.length > 0 && filled.length === 0);
+  }
+
+  $("vendorFileInput").addEventListener("change", async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    $("ocrDetails").style.display = "none";
+    const chunks = [];
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const prefix = files.length > 1 ? `第 ${i + 1}/${files.length} 份（${file.name}）` : "";
+        setOcrStatus(`${prefix ? prefix + "　" : ""}讀取檔案中…`);
+        const canvas = await fileToCanvas(file);
+        const text = await runOcr(canvas, prefix);
+        chunks.push(`===== 檔案 ${i + 1}：${file.name} =====\n${text}`);
+      }
+      const combined = chunks.join("\n\n");
+      $("ocrRawText").value = combined;
+      $("ocrDetails").style.display = "block";
+      setOcrStatus(`辨識完成 ✅（共 ${files.length} 份）已自動帶入下面欄位，請核對`);
+      applyOcrText(combined);
+    } catch (err) {
+      console.error(err);
+      setOcrStatus("辨識失敗：" + (err && err.message ? err.message : "未知錯誤") + "，可以改用手動輸入", true);
+    }
+    e.target.value = "";
+  });
+
+  $("btnReapplyOcr").addEventListener("click", () => {
+    applyOcrText($("ocrRawText").value);
+  });
+
+  // ---------- 買方歷史紀錄（簡易 autocomplete） ----------
+  function loadBuyerHistory() {
+    try { return JSON.parse(localStorage.getItem(LS_BUYERS)) || []; }
+    catch (e) { return []; }
+  }
+  function refreshBuyerHistory() {
+    const list = loadBuyerHistory();
+    const dl = $("buyerHistory");
+    dl.innerHTML = "";
+    list.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      dl.appendChild(opt);
+    });
+  }
+  function rememberBuyer(name) {
+    if (!name) return;
+    const list = loadBuyerHistory();
+    if (!list.includes(name)) {
+      list.unshift(name);
+      localStorage.setItem(LS_BUYERS, JSON.stringify(list.slice(0, 20)));
+      refreshBuyerHistory();
+    }
+  }
+  refreshBuyerHistory();
+
+  // ---------- 狀態訊息 ----------
+  let statusTimer;
+  function setStatus(msg, isError) {
+    clearTimeout(statusTimer);
+    statusEl.textContent = msg;
+    statusEl.className = isError ? "error" : "ok";
+    statusTimer = setTimeout(() => { statusEl.textContent = ""; }, 4000);
+  }
+
+  // ---------- 共用資料模型：Excel 匯出 與 畫面預覽 都吃同一份 ----------
+  function buildModel() {
+    const rows = [];
+    const buyerName = $("buyerName").value || "";
+    rows.push({ kind: "title", text: "DEBIT NOTE" });
+    rows.push({ kind: "text", text: `買方：${buyerName}` });
+    rows.push({ kind: "text", text: `賣方：${$("sellerNameZh").value}` });
+    rows.push({ kind: "text", text: `NO：${$("noValue").value}` });
+    rows.push({ kind: "text", text: `內容：${$("content").value}` });
+    rows.push({ kind: "header", values: HEADERS });
+
+    const itemRows = Array.from(itemsBody.querySelectorAll("tr")).map((tr) => ({
+      date: tr.querySelector(".c-date").value,
+      code: tr.querySelector(".c-code").value,
+      style: tr.querySelector(".c-style").value,
+      pattern: tr.querySelector(".c-pattern").value,
+      qty: parseFloat(tr.querySelector(".c-qty").value) || 0,
+      price: parseFloat(tr.querySelector(".c-price").value) || 0,
+    })).filter((r) => r.date || r.code || r.style || r.pattern || r.qty || r.price);
+
+    let grandTotal = 0;
+    itemRows.forEach((r) => {
+      const total = r.qty * r.price;
+      grandTotal += total;
+      rows.push({ kind: "item", values: [r.date, r.code, r.style, r.pattern, r.qty, r.price, total] });
+    });
+
+    rows.push({ kind: "total", label: "合計金額：", value: `¥${money(grandTotal)}` });
+    rows.push({ kind: "spacer" });
+    rows.push({ kind: "text", text: "收款銀行資料", bold: true });
+    rows.push({ kind: "text", text: `公司英文名稱　${$("sellerNameEn").value}` });
+    rows.push({ kind: "text", text: $("sellerAddrEn").value });
+    rows.push({ kind: "spacer" });
+    rows.push({ kind: "text", text: `電話：${$("sellerPhone").value}` });
+    rows.push({ kind: "text", text: `開戶行：${$("bankNameZh").value}` });
+    rows.push({ kind: "text", text: `帳戶號碼：${$("bankAccount").value}` });
+    rows.push({ kind: "spacer" });
+    rows.push({ kind: "text", text: "銀行中文名稱和地址", bold: true });
+    rows.push({ kind: "text", text: $("bankAddrZh").value });
+    rows.push({ kind: "spacer" });
+    rows.push({ kind: "text", text: "銀行英文名稱和地址", bold: true });
+    ($("bankAddrEn").value || "").split("\n").forEach((line) => {
+      rows.push({ kind: "text", text: line, color: "blue" });
+    });
+    rows.push({ kind: "spacer" });
+    rows.push({ kind: "text", text: `銀行代碼SWIFT CODE：${$("swiftCode").value}` });
+    rows.push({ kind: "spacer" });
+    rows.push({ kind: "twocol", left: `賣方單位：${$("sellerUnit").value}`, right: `買方單位：${$("buyerUnit").value}` });
+    rows.push({ kind: "twocol", left: `經手人：${$("sellerHandler").value}`, right: `經手人：${$("buyerHandler").value}` });
+    rows.push({ kind: "twocol", left: `日期：${$("sellerDate").value}`, right: `日期：${$("buyerDate").value}` });
+
+    return { rows, grandTotal, buyerName };
+  }
+
+  // ---------- 畫面預覽 ----------
+  function esc(s) {
+    const div = document.createElement("div");
+    div.textContent = s == null ? "" : String(s);
+    return div.innerHTML;
+  }
+
+  function renderPreview() {
+    const model = buildModel();
+    const colgroup = "<colgroup>" + COL_WIDTHS.map((w) => `<col style="width:${w}%">`).join("") + "</colgroup>";
+    let html = colgroup;
+
+    model.rows.forEach((row) => {
+      if (row.kind === "title") {
+        html += `<tr><td colspan="7" class="xl-title plain">${esc(row.text)}</td></tr>`;
+      } else if (row.kind === "text") {
+        const cls = ["plain", "wrap"];
+        if (row.bold) cls.push("bold");
+        if (row.color === "blue") cls.push("blue");
+        html += `<tr><td colspan="7" class="${cls.join(" ")}">${esc(row.text)}</td></tr>`;
+      } else if (row.kind === "header") {
+        html += "<tr>" + row.values.map((v) => `<td class="xl-header boxed">${esc(v)}</td>`).join("") + "</tr>";
+      } else if (row.kind === "item") {
+        const [date, code, style, pattern, qty, price, total] = row.values;
+        html += "<tr>"
+          + `<td class="boxed">${esc(date)}</td>`
+          + `<td class="boxed">${esc(code)}</td>`
+          + `<td class="boxed">${esc(style)}</td>`
+          + `<td class="boxed">${esc(pattern)}</td>`
+          + `<td class="boxed num">${qty ? esc(qty) : ""}</td>`
+          + `<td class="boxed num">${price ? esc(money(price)) : ""}</td>`
+          + `<td class="boxed num">${total ? esc(money(total)) : ""}</td>`
+          + "</tr>";
+      } else if (row.kind === "total") {
+        html += `<tr><td colspan="6" class="boxed bold num">${esc(row.label)}</td><td class="boxed bold num">${esc(row.value)}</td></tr>`;
+      } else if (row.kind === "spacer") {
+        html += `<tr class="spacer"><td colspan="7"></td></tr>`;
+      } else if (row.kind === "twocol") {
+        html += `<tr><td colspan="3" class="plain wrap">${esc(row.left)}</td><td colspan="1" class="plain"></td><td colspan="3" class="plain wrap">${esc(row.right)}</td></tr>`;
+      }
+    });
+
+    previewTable.innerHTML = html;
+  }
+
+  let previewTimer;
+  function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(renderPreview, 120);
+  }
+
+  // 任何輸入變動都即時更新預覽
+  document.body.addEventListener("input", schedulePreview);
+  document.body.addEventListener("change", schedulePreview);
+
+  // ---------- 產生 Excel（跟預覽吃同一份 model） ----------
+  async function buildWorkbook(model) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("DEBIT NOTE");
+    ws.columns = [
+      { width: 10 }, { width: 10 }, { width: 12 }, { width: 12 },
+      { width: 8 }, { width: 12 }, { width: 14 }
+    ];
+
+    const thinBorder = { style: "thin", color: { argb: "FF999999" } };
+    const boxBorder = { top: thinBorder, left: thinBorder, bottom: thinBorder, right: thinBorder };
+
+    function mergedTextRow(text, opts) {
+      opts = opts || {};
+      const rowIdx = ws.rowCount + 1;
+      ws.mergeCells(`A${rowIdx}:G${rowIdx}`);
+      const cell = ws.getCell(`A${rowIdx}`);
+      cell.value = text;
+      cell.font = { bold: !!opts.bold, size: opts.size || 11, color: opts.color ? { argb: opts.color } : undefined };
+      cell.alignment = { vertical: "middle", horizontal: opts.center ? "center" : "left", wrapText: true };
+      if (opts.height) ws.getRow(rowIdx).height = opts.height;
+      return rowIdx;
+    }
+
+    model.rows.forEach((row) => {
+      if (row.kind === "title") {
+        mergedTextRow(row.text, { bold: true, size: 16, center: true, height: 24 });
+      } else if (row.kind === "text") {
+        mergedTextRow(row.text, { bold: row.bold, color: row.color === "blue" ? "FF2F5FA8" : undefined });
+      } else if (row.kind === "header") {
+        const rowIdx = ws.rowCount + 1;
+        ws.getRow(rowIdx).values = row.values;
+        ws.getRow(rowIdx).eachCell((cell) => {
+          cell.font = { bold: true };
+          cell.alignment = { vertical: "middle", horizontal: "center" };
+          cell.border = boxBorder;
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF1F5" } };
+        });
+      } else if (row.kind === "item") {
+        const [date, code, style, pattern, qty, price, total] = row.values;
+        const rowIdx = ws.rowCount + 1;
+        const r = ws.getRow(rowIdx);
+        r.values = [date, code, style, pattern, qty || null, price || null, total || null];
+        r.getCell(5).numFmt = "0";
+        r.getCell(6).numFmt = "0.00";
+        r.getCell(7).numFmt = "0.00";
+        r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          cell.border = boxBorder;
+          if (colNumber >= 5) cell.alignment = { horizontal: "right" };
+        });
+      } else if (row.kind === "total") {
+        const rowIdx = ws.rowCount + 1;
+        ws.mergeCells(`A${rowIdx}:F${rowIdx}`);
+        const labelCell = ws.getCell(`A${rowIdx}`);
+        labelCell.value = row.label;
+        labelCell.font = { bold: true };
+        labelCell.alignment = { horizontal: "right" };
+        const valueCell = ws.getCell(`G${rowIdx}`);
+        valueCell.value = row.value;
+        valueCell.font = { bold: true };
+        valueCell.alignment = { horizontal: "right" };
+        [labelCell, valueCell].forEach((c) => { c.border = boxBorder; });
+      } else if (row.kind === "spacer") {
+        ws.addRow([]);
+      } else if (row.kind === "twocol") {
+        const rowIdx = ws.rowCount + 1;
+        ws.mergeCells(`A${rowIdx}:C${rowIdx}`);
+        ws.mergeCells(`E${rowIdx}:G${rowIdx}`);
+        const leftCell = ws.getCell(`A${rowIdx}`);
+        leftCell.value = row.left;
+        const rightCell = ws.getCell(`E${rowIdx}`);
+        rightCell.value = row.right;
+        [leftCell, rightCell].forEach((c) => { c.alignment = { wrapText: true }; });
+      }
+    });
+
+    return wb;
+  }
+
+  $("btnGenerate").addEventListener("click", async () => {
+    if (typeof ExcelJS === "undefined") {
+      setStatus("Excel 產生元件還沒載入完成，請確認網路連線後重新整理再試一次", true);
+      return;
+    }
+    const model = buildModel();
+    const hasItems = model.rows.some((r) => r.kind === "item");
+    if (!hasItems) {
+      setStatus("請至少填一列品項明細", true);
+      return;
+    }
+
+    rememberBuyer(model.buyerName);
+
+    const wb = await buildWorkbook(model);
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const seller = $("sellerNameZh").value || "DebitNote";
+    const no = $("noValue").value || "";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `DebitNote_${seller}_${no}.xlsx`.replace(/[\\/:*?"<>|]/g, "");
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus("Excel 已下載完成 ✅");
+  });
+
+  // 預設先給 3 列可填，並渲染一次初始預覽
+  addRow(); addRow(); addRow();
+  renderPreview();
+
+})();
+</script>
+</body>
+</html>
