@@ -204,7 +204,7 @@
 <div class="section">
   <h2>單據資訊</h2>
   <div class="grid">
-    <label>文件類型
+    <label>預覽顯示
       <select id="docType">
         <option value="debit">DEBIT NOTE</option>
         <option value="delivery">送貨單</option>
@@ -215,6 +215,7 @@
       <datalist id="buyerHistory"></datalist>
     </label>
   </div>
+  <div class="hint" style="margin-top:4px; margin-bottom:0;">「預覽顯示」只影響右邊即時預覽要看哪一種；下載 Excel 時 DEBIT NOTE、送貨單兩個分頁一定都會匯出。</div>
   <div class="grid" id="debitOnlyFields" style="margin-top:10px;">
     <label>NO.（單號）
       <input type="text" id="noValue" placeholder="例：08072026">
@@ -1177,13 +1178,13 @@
     return $("docType").value === "delivery" ? "delivery" : "debit";
   }
   function updateDocTypeUI() {
-    const delivery = currentDocType() === "delivery";
-    $("debitOnlyFields").style.display = delivery ? "none" : "";
     schedulePreview();
   }
 
-  function buildModel() {
-    const docType = currentDocType();
+  // docType 沒傳的話用畫面上「預覽顯示」選的那個（給即時預覽用）。
+  // 下載 Excel 時會分別傳 "debit" 跟 "delivery" 各建一份 model，兩份分頁一起匯出。
+  function buildModel(docType) {
+    docType = docType || currentDocType();
     const cfg = DOC_TYPES[docType];
     const rows = [];
     const buyerName = $("buyerName").value || "";
@@ -1313,9 +1314,9 @@
   document.body.addEventListener("change", schedulePreview);
 
   // ---------- 產生 Excel（跟預覽吃同一份 model） ----------
-  async function buildWorkbook(model) {
+  // 一張 model（DEBIT NOTE 或 送貨單）寫成 workbook 裡的一個分頁。
+  function addDocSheet(wb, model) {
     const cols = model.cfg.cols; // 7 (DEBIT NOTE) 或 8（送貨單，多一欄跟單）
-    const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(model.cfg.title);
     const baseWidths = [10, 10, 12, 12, 8, 12, 14, 10];
     ws.columns = baseWidths.slice(0, cols).map((width) => ({ width }));
@@ -1393,7 +1394,15 @@
         [leftCell, rightCell].forEach((c) => { c.alignment = { wrapText: true }; });
       }
     });
+  }
 
+  // 一次產生 DEBIT NOTE + 送貨單兩個分頁（共用同一份廠商/銀行/品項/簽署資料），
+  // 再視情況加上運費截圖分頁，跟你原本的範本檔案結構一樣。
+  async function buildWorkbook() {
+    const wb = new ExcelJS.Workbook();
+    addDocSheet(wb, buildModel("debit"));
+    addDocSheet(wb, buildModel("delivery"));
+    addFreightSheet(wb);
     return wb;
   }
 
@@ -1402,27 +1411,26 @@
       setStatus("Excel 產生元件還沒載入完成，請確認網路連線後重新整理再試一次", true);
       return;
     }
-    const model = buildModel();
-    const hasItems = model.rows.some((r) => r.kind === "item");
+    const previewModel = buildModel(); // 只用來檢查有沒有品項、記錄買方歷史
+    const hasItems = previewModel.rows.some((r) => r.kind === "item");
     if (!hasItems) {
       setStatus("請至少填一列品項明細", true);
       return;
     }
 
-    rememberBuyer(model.buyerName);
+    rememberBuyer(previewModel.buyerName);
 
-    const wb = await buildWorkbook(model);
-    addFreightSheet(wb);
+    const wb = await buildWorkbook();
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const seller = $("sellerNameZh").value || model.cfg.filePrefix;
-    const no = model.docType === "delivery" ? "" : $("noValue").value || "";
+    const seller = $("sellerNameZh").value || "DebitNote";
+    const no = $("noValue").value || "";
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `${model.cfg.filePrefix}_${seller}_${no}.xlsx`.replace(/_+\.xlsx$/, ".xlsx").replace(/[\\/:*?"<>|]/g, "");
+    a.download = `DebitNote_送貨單_${seller}_${no}.xlsx`.replace(/_+\.xlsx$/, ".xlsx").replace(/[\\/:*?"<>|]/g, "");
     a.click();
     URL.revokeObjectURL(a.href);
-    setStatus(`${model.cfg.title} Excel 已下載完成 ✅`);
+    setStatus("Excel 已下載完成 ✅（DEBIT NOTE + 送貨單" + (freightImages.length ? " + 運費截圖" : "") + "）");
   });
 
   $("docType").addEventListener("change", updateDocTypeUI);
