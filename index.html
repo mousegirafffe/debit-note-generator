@@ -94,6 +94,29 @@
   td input:focus { outline: 1px solid var(--accent); background: #fff; }
   .col-del { width: 68px; text-align: center; }
   .th-note { font-weight: normal; font-size: 11px; color: #888; }
+
+  .freight-gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .freight-thumb {
+    position: relative;
+    width: 100px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .freight-thumb img { width: 100%; height: 100px; object-fit: cover; display: block; }
+  .freight-thumb .freight-name { font-size: 10px; color: #666; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .freight-thumb .freight-remove {
+    position: absolute; top: 3px; right: 3px;
+    width: 20px; height: 20px; padding: 0; line-height: 1;
+    border-radius: 50%; font-size: 12px;
+    background: rgba(255,255,255,0.9);
+  }
   .row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
   .row-actions button { padding: 3px 0; font-size: 12px; line-height: 1; }
   .btn-dup, .btn-up, .btn-down { border-color: #888; color: #555; }
@@ -309,6 +332,14 @@
       <input type="text" id="buyerDate">
     </label>
   </div>
+</div>
+
+<div class="section">
+  <h2>運費截圖（選填）</h2>
+  <div class="hint">可以一次選多張圖片（例如宅配/貨運系統的運費查詢截圖），下載 Excel 時會自動排版貼進一個獨立的「運費截圖」分頁，不用再手動一張一張貼。</div>
+  <input type="file" id="freightFileInput" accept="image/*" multiple>
+  <div id="freightStatus" class="hint" style="margin-top:6px; margin-bottom:0;"></div>
+  <div id="freightGallery" class="freight-gallery"></div>
 </div>
 
 </div><!-- /.form-col -->
@@ -708,6 +739,97 @@
     }
     e.target.value = "";
   });
+
+  // ---------- 運費截圖：多張圖片，下載 Excel 時自動排版貼進獨立分頁 ----------
+  let freightImages = []; // [{ name, dataUrl, ext, width, height }]
+  const FREIGHT_MAX_W = 320;
+  const FREIGHT_MAX_H = 480;
+
+  function resizeImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = () => {
+          let w = img.naturalWidth, h = img.naturalHeight;
+          const scale = Math.min(1, FREIGHT_MAX_W / w, FREIGHT_MAX_H / h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          const isPng = /png/i.test(file.type);
+          const ext = isPng ? "png" : "jpeg";
+          const dataUrl = canvas.toDataURL(isPng ? "image/png" : "image/jpeg", 0.85);
+          resolve({ name: file.name, dataUrl, ext, width: w, height: h });
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderFreightGallery() {
+    const gallery = $("freightGallery");
+    gallery.innerHTML = freightImages.map((img, idx) => `
+      <div class="freight-thumb">
+        <button type="button" class="danger freight-remove" data-idx="${idx}" title="移除">✕</button>
+        <img src="${img.dataUrl}" alt="${esc(img.name)}">
+        <div class="freight-name">${esc(img.name)}</div>
+      </div>
+    `).join("");
+    gallery.querySelectorAll(".freight-remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        freightImages.splice(parseInt(btn.dataset.idx, 10), 1);
+        renderFreightGallery();
+        updateFreightStatus();
+      });
+    });
+  }
+
+  function updateFreightStatus() {
+    $("freightStatus").textContent = freightImages.length ? `已選 ${freightImages.length} 張圖片，下載 Excel 時會自動排版進「運費截圖」分頁` : "";
+  }
+
+  $("freightFileInput").addEventListener("change", async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    $("freightStatus").textContent = "處理圖片中…";
+    try {
+      const resized = await Promise.all(files.map(resizeImageFile));
+      freightImages = freightImages.concat(resized);
+      renderFreightGallery();
+      updateFreightStatus();
+    } catch (err) {
+      console.error(err);
+      $("freightStatus").textContent = "圖片讀取失敗：" + (err && err.message ? err.message : "未知錯誤");
+    }
+    e.target.value = "";
+  });
+
+  // 把運費截圖排版貼進 workbook 的獨立分頁：固定 3 欄網格，每張圖片依實際縮放後的
+  // 寬高換算成儲存格單位（用預設欄寬 64px、列高 20px 概算），避免互相疊到。
+  function addFreightSheet(wb) {
+    if (!freightImages.length) return;
+    const ws = wb.addWorksheet("運費截圖");
+    const PX_PER_COL = 64;
+    const PX_PER_ROW = 20;
+    const GAP_PX = 16;
+    const cols = 3;
+    const slotWCols = Math.ceil((FREIGHT_MAX_W + GAP_PX) / PX_PER_COL);
+    const slotHRows = Math.ceil((FREIGHT_MAX_H + GAP_PX) / PX_PER_ROW);
+    freightImages.forEach((img, idx) => {
+      const imgId = wb.addImage({ base64: img.dataUrl, extension: img.ext });
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      ws.addImage(imgId, {
+        tl: { col: col * slotWCols, row: row * slotHRows },
+        ext: { width: img.width, height: img.height },
+      });
+    });
+  }
 
   // ---------- 廠商 (賣方/銀行) 預設值管理 ----------
   function loadVendors() {
@@ -1290,6 +1412,7 @@
     rememberBuyer(model.buyerName);
 
     const wb = await buildWorkbook(model);
+    addFreightSheet(wb);
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const seller = $("sellerNameZh").value || model.cfg.filePrefix;
